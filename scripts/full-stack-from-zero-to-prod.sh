@@ -265,6 +265,18 @@ npx create-t3-app@latest $APP_NAME \
     --eslint true
 
 cd $APP_NAME
+
+# Create vercel.json for public access configuration
+log_info "Creating Vercel configuration for public access..."
+cat > vercel.json << EOF
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "framework": "nextjs"
+}
+EOF
+
 log_success "T3 application created"
 
 # Step 7: Create GitHub Repository
@@ -309,8 +321,14 @@ log_info "Database URL: $DB_URL"
 # Step 9: Deploy to Vercel
 log_info "Deploying to Vercel..."
 
+# Remove any existing Vercel configuration to ensure fresh deployment
+if [[ -d ".vercel" ]]; then
+    log_info "Removing existing Vercel configuration for fresh deployment..."
+    rm -rf .vercel
+fi
+
 # Deploy to Vercel (auto-answer setup prompts)
-echo "y" | vercel --prod --yes
+vercel --prod --yes
 
 log_info "Adding database configuration"
 # Add database URL to Vercel environment
@@ -321,8 +339,15 @@ log_info "Deploying database schema"
 DATABASE_URL="$DB_URL" npx prisma db push
 
 log_info "Final deployment"
+# Remove .vercel folder again to ensure clean final deployment
+if [[ -d ".vercel" ]]; then
+    rm -rf .vercel
+fi
+
 # Final deployment with database connected
-PRODUCTION_URL=$(vercel --prod --yes | grep "Production:" | awk '{print $2}')
+DEPLOYMENT_OUTPUT=$(vercel --prod --yes 2>&1)
+echo "$DEPLOYMENT_OUTPUT"
+PRODUCTION_URL=$(echo "$DEPLOYMENT_OUTPUT" | grep -E "(Production:|✅  Production:)" | sed 's/.*Production: *//' | awk '{print $1}')
 
 # Extract domain information
 PROJECT_DOMAIN=""
@@ -349,10 +374,20 @@ echo ""
 
 # Verify deployment
 log_info "Verifying deployment..."
-if curl -s --head "$PRODUCTION_URL" | head -n 1 | grep -q "200 OK"; then
-    log_success "Application is live and responding!"
+if [[ -n "$PRODUCTION_URL" ]]; then
+    if curl -s --head "$PRODUCTION_URL" | head -n 1 | grep -q "200 OK"; then
+        log_success "Application is live and responding!"
+    else
+        log_warning "Application may still be deploying. Check $PRODUCTION_URL in a few minutes."
+    fi
 else
-    log_warning "Application may still be deploying. Check $PRODUCTION_URL in a few minutes."
+    # Fallback: try to get URL from vercel ls
+    PRODUCTION_URL=$(vercel ls 2>/dev/null | grep "$APP_NAME" | awk '{print "https://" $1}' | head -1)
+    if [[ -n "$PRODUCTION_URL" ]]; then
+        log_info "Found production URL: $PRODUCTION_URL"
+    else
+        log_warning "Could not determine production URL. Check vercel dashboard."
+    fi
 fi
 
 # Display environment variables for verification
