@@ -33,8 +33,8 @@ log_error() {
 # Step 1: Environment Setup
 log_info "Starting T3 Stack Deployment..."
 
-# Get app name from current directory or use argument
-APP_NAME=${1:-$(basename "$PWD")}
+# Get app name from current directory
+APP_NAME=$(basename "$PWD")
 log_info "Deploying app: $APP_NAME"
 
 # Force mode enabled by default
@@ -199,15 +199,17 @@ if [[ "$FORCE_MODE" == "true" ]]; then
         log_info "No existing Vercel project found with name: $APP_NAME"
     fi
     
-    # Remove local directory
-    log_info "Checking for local directory: $APP_NAME"
-    if [[ -d "$APP_NAME" ]]; then
-        log_info "Found local directory, removing: $APP_NAME"
-        rm -rf $APP_NAME
-        log_success "Local directory removed successfully"
-    else
-        log_info "No local directory found (this is normal for clean deployment)"
+    # Clean current directory contents (except the script itself)
+    log_info "Cleaning current directory contents"
+    find . -mindepth 1 -maxdepth 1 ! -name "$(basename "$0")" ! -name ".*" -exec rm -rf {} + 2>/dev/null || true
+    
+    # Clean git repository if it exists
+    if [[ -d ".git" ]]; then
+        log_info "Removing existing git repository"
+        rm -rf .git
     fi
+    
+    log_success "Current directory cleaned successfully"
     
     log_success "Resource cleanup phase completed"
 fi
@@ -238,9 +240,9 @@ if [[ "$FORCE_MODE" == "false" ]]; then
         CONFLICTS=true
     fi
     
-    # Check local directory
-    if [[ -d "$APP_NAME" ]]; then
-        log_error "Directory '$APP_NAME' already exists"
+    # Check if current directory has content
+    if [[ $(find . -mindepth 1 -maxdepth 1 ! -name "$(basename "$0")" ! -name ".*" | wc -l) -gt 0 ]]; then
+        log_error "Current directory is not empty"
         CONFLICTS=true
     fi
     
@@ -264,7 +266,22 @@ npx create-t3-app@latest $APP_NAME \
     --dbProvider postgres \
     --eslint true
 
-cd $APP_NAME
+# Move all files from subfolder to current directory
+log_info "Moving T3 application files to current directory..."
+if [[ -d "$APP_NAME" ]]; then
+    # Move all files including hidden ones from subfolder to current directory
+    mv "$APP_NAME"/* . 2>/dev/null || true
+    mv "$APP_NAME"/.[^.]* . 2>/dev/null || true
+    
+    # Remove the now empty subfolder
+    rmdir "$APP_NAME" 2>/dev/null || {
+        log_warning "Could not remove empty directory $APP_NAME"
+    }
+    
+    log_success "T3 application files moved to current directory"
+else
+    log_warning "Expected T3 directory $APP_NAME not found"
+fi
 
 # Create vercel.json for public access configuration
 log_info "Creating Vercel configuration for public access..."
@@ -363,13 +380,10 @@ fi
 echo ""
 log_success "🎉 DEPLOYMENT COMPLETE! 🎉"
 echo ""
-echo -e "${GREEN}📱 App Details:${NC}"
-echo -e "   ${BLUE}Specific URL:${NC} $PRODUCTION_URL"
-if [[ -n "$PROJECT_DOMAIN" ]]; then
-    echo -e "   ${BLUE}Domain:${NC} https://$PROJECT_DOMAIN"
-fi
+echo -e "${GREEN}📱 Deployment Progress:${NC}"
 echo -e "   ${BLUE}GitHub:${NC} $REPO_URL"
-echo -e "   ${BLUE}Database:${NC} $PROJECT_ID (Neon PostgreSQL)"
+echo -e "   ${BLUE}Database:${NC} https://console.neon.tech/app/projects/$PROJECT_ID"
+echo -e "   ${BLUE}Deployment Status:${NC} $PRODUCTION_URL"
 echo ""
 
 # Verify deployment
@@ -404,21 +418,24 @@ sleep 10
 
 log_success "T3 Stack deployment completed successfully!"
 echo ""
-echo -e "${YELLOW}🚀 Next steps:${NC}"
-echo "1. 🌐 Visit your app:"
-echo "   • Latest deployment: $PRODUCTION_URL"
+echo -e "${YELLOW}🚀 Your App is Ready:${NC}"
 if [[ -n "$PROJECT_DOMAIN" ]]; then
-    echo "   • Project domain: https://$PROJECT_DOMAIN"
+    echo -e "${GREEN}🌐 App URL: https://$PROJECT_DOMAIN${NC}"
+else
+    echo -e "${GREEN}🌐 App URL: $PRODUCTION_URL${NC}"
 fi
-echo "2. 📝 Check the repository: $REPO_URL"
-echo "3. 💻 For local development: cd $APP_NAME && npm run dev"
-echo "4. 🗄️  Database management: https://console.neon.tech/app/projects/$PROJECT_ID"
-echo "5. 📋 View all links: cat docs/links.md"
 echo ""
-echo -e "${GREEN}🎯 Quick Links:${NC}"
-echo "• App: $PRODUCTION_URL"
-echo "• Repo: $REPO_URL"
-echo "• DB: https://console.neon.tech/app/projects/$PROJECT_ID"
+echo -e "${BLUE}💡 Note: If the page is already open, please refresh to see the latest version${NC}"
+echo ""
+echo -e "${YELLOW}🛠️  Development Environment:${NC}"
+echo "✅ Local database setup (automatic)"
+echo "✅ Development server starting (automatic)"
+echo "✅ Production and local URLs opening (automatic)"
+echo ""
+echo -e "${YELLOW}📋 Management Links:${NC}"
+echo "• 📝 Repository: $REPO_URL"
+echo "• 🗄️  Database: https://console.neon.tech/app/projects/$PROJECT_ID"
+echo "• 📋 Full details: cat docs/links.md"
 echo ""
 
 # Create docs directory and links file
@@ -430,8 +447,9 @@ cat > docs/links.md << EOF
 # ${APP_NAME} - Deployment Links
 
 ## 🚀 Live Application
-- **Latest Deployment**: $PRODUCTION_URL
-$(if [[ -n "$PROJECT_DOMAIN" ]]; then echo "- **Project Domain**: https://$PROJECT_DOMAIN"; fi)
+$(if [[ -n "$PROJECT_DOMAIN" ]]; then echo "- **App URL**: https://$PROJECT_DOMAIN"; else echo "- **App URL**: $PRODUCTION_URL"; fi)
+
+> **Note**: To open the app, use the domain link above. If the page is already open, refresh to see the latest version.
 
 ## 📝 Repository
 - **GitHub**: $REPO_URL
@@ -442,17 +460,44 @@ $(if [[ -n "$PROJECT_DOMAIN" ]]; then echo "- **Project Domain**: https://$PROJE
 - **Project ID**: $PROJECT_ID
 - **Console**: https://console.neon.tech/app/projects/$PROJECT_ID
 
-## 🛠️ Development
+## 🛠️ Local Development
+
+### Prerequisites
+- Docker (for local database)
+
+### Setup Steps
 \`\`\`bash
-# Clone the repository
+# 1. Clone the repository
 git clone $REPO_URL.git
 cd $APP_NAME
 
-# Install dependencies
+# 2. Install dependencies
 npm install
 
-# Start development server
+# 3. Create local database (requires Docker)
+./database.sh
+
+# 4. Start development server
 npm run dev
+\`\`\`
+
+### Working in this directory:
+The deployment script automatically:
+- ✅ Sets up local database (requires Docker)
+- ✅ Runs Prisma schema migration
+- ✅ Starts development server
+- ✅ Opens both production and local URLs
+
+Manual commands (if needed):
+\`\`\`bash
+# Restart development server
+npm run dev
+
+# Check dev server logs
+tail -f dev.log
+
+# Reset local database
+./database.sh && npx prisma db push
 \`\`\`
 
 ## 📊 Management URLs
@@ -465,3 +510,151 @@ npm run dev
 EOF
 
 log_success "Deployment links saved to docs/links.md"
+
+# Step 11: Local Development Setup
+log_info "Setting up local development environment..."
+
+# Function to check if a port is in use and stop the process
+cleanup_port() {
+    local port=$1
+    local pid=$(lsof -ti:$port 2>/dev/null)
+    if [[ -n "$pid" ]]; then
+        log_info "Stopping process on port $port (PID: $pid)"
+        kill -9 $pid 2>/dev/null || true
+        sleep 2
+    fi
+}
+
+# Clean up port 5432 (PostgreSQL)
+log_info "Cleaning up port 5432..."
+cleanup_port 5432
+
+# Check if Docker is running and start if needed
+if ! docker info >/dev/null 2>&1; then
+    log_info "Docker is not running. Attempting to start Docker..."
+    
+    # Try to start Docker based on OS
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS - start Docker Desktop
+        if [[ -d "/Applications/Docker.app" ]]; then
+            log_info "Starting Docker Desktop..."
+            open -a Docker
+            
+            # Wait for Docker to start (up to 60 seconds)
+            log_info "Waiting for Docker to start..."
+            for i in {1..30}; do
+                if docker info >/dev/null 2>&1; then
+                    log_success "Docker started successfully!"
+                    break
+                fi
+                sleep 2
+                if [[ $i -eq 30 ]]; then
+                    log_error "Docker failed to start within 60 seconds"
+                    log_warning "Please start Docker manually and run './start-database.sh' manually"
+                fi
+            done
+        else
+            log_warning "Docker Desktop not found. Please install Docker and run './start-database.sh' manually"
+        fi
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux - try to start Docker service
+        log_info "Starting Docker service..."
+        if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl start docker
+            sleep 5
+            if docker info >/dev/null 2>&1; then
+                log_success "Docker started successfully!"
+            else
+                log_warning "Failed to start Docker. Please start Docker manually and run './start-database.sh' manually"
+            fi
+        else
+            log_warning "Cannot start Docker automatically. Please start Docker manually and run './start-database.sh' manually"
+        fi
+    else
+        log_warning "Unknown OS. Please start Docker manually and run './start-database.sh' manually"
+    fi
+fi
+
+# Proceed with database setup if Docker is now running
+if docker info >/dev/null 2>&1; then
+    # Run database setup if start-database.sh exists
+    if [[ -f "start-database.sh" ]]; then
+        log_info "Setting up local database..."
+        chmod +x start-database.sh
+        ./start-database.sh
+        
+        # Wait for database to be ready
+        log_info "Waiting for database to be ready..."
+        sleep 5
+        
+        # Run Prisma db push
+        log_info "Setting up database schema..."
+        npm run db:push 2>/dev/null || npx prisma db push || {
+            log_warning "Database schema setup failed. Run 'npx prisma db push' manually after database is ready"
+        }
+    else
+        log_warning "start-database.sh not found. Skipping local database setup"
+    fi
+fi
+
+# Open production URL in browser
+log_info "Opening production app in browser..."
+if [[ -n "$PROJECT_DOMAIN" ]]; then
+    open "https://$PROJECT_DOMAIN" 2>/dev/null || {
+        log_info "Could not open browser automatically. Visit: https://$PROJECT_DOMAIN"
+    }
+else
+    open "$PRODUCTION_URL" 2>/dev/null || {
+        log_info "Could not open browser automatically. Visit: $PRODUCTION_URL"
+    }
+fi
+
+# Start development server in background
+log_info "Starting development server..."
+npm run dev > dev.log 2>&1 &
+DEV_PID=$!
+
+# Function to check if dev server is ready
+check_dev_server() {
+    local max_attempts=30
+    local attempt=0
+    
+    while [[ $attempt -lt $max_attempts ]]; do
+        if curl -s http://localhost:3000 >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    return 1
+}
+
+# Wait for dev server and open localhost
+log_info "Waiting for development server to start..."
+if check_dev_server; then
+    log_success "Development server is ready!"
+    open "http://localhost:3000" 2>/dev/null || {
+        log_info "Could not open browser automatically. Visit: http://localhost:3000"
+    }
+else
+    log_warning "Development server took longer than expected to start"
+    log_info "Check 'tail -f dev.log' for development server output"
+fi
+
+echo ""
+log_success "🎉 SETUP COMPLETE! 🎉"
+echo ""
+echo -e "${GREEN}🌐 Your app is running:${NC}"
+if [[ -n "$PROJECT_DOMAIN" ]]; then
+    echo -e "   ${BLUE}Production:${NC} https://$PROJECT_DOMAIN"
+else
+    echo -e "   ${BLUE}Production:${NC} $PRODUCTION_URL"
+fi
+echo -e "   ${BLUE}Local Dev:${NC} http://localhost:3000"
+echo ""
+echo -e "${YELLOW}💡 Development Tips:${NC}"
+echo "• Check dev server output: tail -f dev.log"
+echo "• Stop dev server: kill $DEV_PID"
+echo "• Restart dev server: npm run dev"
+echo "• Database console: https://console.neon.tech/app/projects/$PROJECT_ID"
+echo ""
